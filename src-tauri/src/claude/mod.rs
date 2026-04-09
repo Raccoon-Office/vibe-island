@@ -41,14 +41,9 @@ struct ClaudeHookInput {
     tool_name: Option<String>,
     tool_input: Option<serde_json::Value>,
     tool_response: Option<serde_json::Value>,
-    /// Present on Stop hooks (value is false normally)
     stop_hook_active: Option<bool>,
-    /// Present on Notification hooks
     message: Option<String>,
-    /// Present on Start hook
     cwd: Option<String>,
-    /// Present on Start hook
-    transcript_path: Option<String>,
 }
 
 pub fn socket_path() -> PathBuf {
@@ -182,6 +177,9 @@ async fn handle_connection(stream: UnixStream, app_handle: AppHandle) {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| agent_name.clone());
 
+            let _agent_pid = hook.session_id.strip_prefix("cli-")
+                .and_then(|p| p.parse::<u32>().ok());
+
             let session = Session {
                 id: hook.session_id.clone(),
                 agent: agent_name,
@@ -189,7 +187,7 @@ async fn handle_connection(stream: UnixStream, app_handle: AppHandle) {
                 cwd: hook.cwd.clone().unwrap_or_default(),
                 status: "running".to_string(),
                 terminal: detect_terminal(),
-                tab_id: get_current_tab_id(),
+                tab_id: format!("tab-{}", hook.session_id),
                 started_at: now_secs(),
                 last_activity: now_secs(),
             };
@@ -309,10 +307,6 @@ fn detect_terminal() -> String {
         Ok(other) if !other.is_empty() => other.to_string(),
         _ => "Unknown".to_string(),
     }
-}
-
-fn get_current_tab_id() -> String {
-    format!("tab-{}", std::process::id())
 }
 
 fn now_secs() -> u64 {

@@ -1,3 +1,4 @@
+#![allow(unexpected_cfgs)]
 mod ipc;
 mod claude;
 mod terminal;
@@ -114,11 +115,32 @@ pub fn run() {
                 let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
                 let _ = window.set_shadow(false);
 
+                #[cfg(target_os = "macos")]
+                #[allow(deprecated)]
+                {
+                    use cocoa::base::{id, YES, NO};
+                    use objc::{class, msg_send, sel, sel_impl};
+
+                    let ns_window: id = window.ns_window().unwrap() as id;
+                    #[allow(deprecated)]
+                    unsafe {
+                        let bg: id = msg_send![class!(NSColor), colorWithCalibratedRed:0.0 green:0.0 blue:0.0 alpha:0.0];
+                        let _: () = msg_send![ns_window, setOpaque: NO];
+                        let _: () = msg_send![ns_window, setBackgroundColor: bg];
+                        let _: () = msg_send![ns_window, setHasShadow: NO];
+
+                        let content_view: id = msg_send![ns_window, contentView];
+                        let _: () = msg_send![content_view, setWantsLayer: YES];
+                        let cl: id = msg_send![content_view, layer];
+                        let _: () = msg_send![cl, setCornerRadius: 24.0];
+                        let _: () = msg_send![cl, setMasksToBounds: YES];
+                    }
+                }
+
                 if let Ok(Some(monitor)) = window.primary_monitor() {
                     let screen_size = monitor.size();
                     let scale = monitor.scale_factor();
-                    let win_w = 340.0;
-                    let win_h = 400.0;
+                    let win_w: f64 = 340.0;
                     let x = (screen_size.width as f64 / scale) - win_w - 16.0;
                     let y = 48.0;
                     let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));

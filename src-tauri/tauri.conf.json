@@ -29,7 +29,11 @@
     ],
     "security": {
       "csp": null
-    }
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "icon": ["icons/icon.png", "icons/icon.icns"]
   },
   "plugins": {
     "shell": {

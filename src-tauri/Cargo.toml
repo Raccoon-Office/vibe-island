@@ -1,0 +1,25 @@
+[package]
+name = "vibe-island"
+version = "0.1.0"
+edition = "2021"
+description = "Dynamic Island for AI coding agents"
+authors = ["Vibe Island"]
+license = "MIT"
+
+[lib]
+name = "vibe_island_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.2", features = ["devtools"] }
+tauri-plugin-shell = "2.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.42", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+dirs = "6.0"
+libc = "0.2"

@@ -12,11 +12,16 @@ describe("Session type", () => {
     tabId: "tab-cli-12345",
     startedAt: 1000000,
     lastActivity: 1000100,
+    termProgram: "iTerm.app",
+    itermSessionId: "w0t0p0:ABC-123",
+    tmuxPane: "",
+    tty: "/dev/ttys003",
   };
 
   it("accepts valid running session", () => {
     expect(baseSession.status).toBe("running");
     expect(baseSession.agent).toBe("claude-code");
+    expect(baseSession.termProgram).toBe("iTerm.app");
   });
 
   it("accepts waiting status", () => {
@@ -40,6 +45,10 @@ describe("Session type", () => {
     expect(keys).toContain("tabId");
     expect(keys).toContain("startedAt");
     expect(keys).toContain("lastActivity");
+    expect(keys).toContain("termProgram");
+    expect(keys).toContain("itermSessionId");
+    expect(keys).toContain("tmuxPane");
+    expect(keys).toContain("tty");
   });
 });
 
@@ -88,6 +97,10 @@ describe("IPCEvent type", () => {
     tabId: "tab-1",
     startedAt: 1000,
     lastActivity: 1000,
+    termProgram: "",
+    itermSessionId: "",
+    tmuxPane: "",
+    tty: "",
   };
 
   it("handles session_started event", () => {

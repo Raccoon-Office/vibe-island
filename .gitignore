@@ -1,5 +1,6 @@
 node_modules/
 dist/
+target/
 src-tauri/target/
 src-tauri/gen/schemas/
 .DS_Store
@@ -7,3 +8,4 @@ src-tauri/gen/schemas/
 .env
 .env.*
 REFACTOR_STATUS.md
+.ruff_cache/

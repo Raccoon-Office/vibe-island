@@ -28,6 +28,10 @@ mod tests {
             tab_id: "tab-cli-12345".to_string(),
             started_at: 1000,
             last_activity: 1100,
+            term_program: "iTerm.app".to_string(),
+            iterm_session_id: String::new(),
+            tmux_pane: String::new(),
+            tty: String::new(),
         }
     }
 

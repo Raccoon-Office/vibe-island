@@ -1,14 +1,14 @@
 use std::process::Command;
 use tracing::{error, info, warn};
 
-pub fn jump_to_session(terminal: &str, tab_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("Jumping to terminal: {} tab: {}", terminal, tab_id);
+pub fn jump_to_session(terminal: &str, tab_id: &str, iterm_session_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    info!("Jumping to terminal: {} tab: {} iterm_session: {}", terminal, tab_id, iterm_session_id);
 
     let agent_pid = tab_id.strip_prefix("tab-cli-")
         .and_then(|p| p.parse::<u32>().ok());
 
     match terminal {
-        "iTerm2" => jump_iterm2_by_pid(agent_pid),
+        "iTerm2" => jump_iterm2(agent_pid, iterm_session_id),
         "Terminal" => jump_terminal_by_pid(agent_pid),
         "Ghostty" => jump_ghostty_tab(),
         "VSCode" | "Code" => jump_app("Visual Studio Code"),
@@ -70,6 +70,37 @@ fn jump_ghostty_tab() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     Ok(())
+}
+
+fn jump_iterm2(agent_pid: Option<u32>, iterm_session_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if !iterm_session_id.is_empty() {
+        let escaped_id = escape_applescript_str(iterm_session_id);
+        let script = format!(r#"
+tell application "iTerm"
+    activate
+    try
+        repeat with w in windows
+            set winTabs to tabs of w
+            repeat with t in winTabs
+                set s to current session of t
+                if session id of s is "{}" then
+                    select t
+                    return
+                end if
+            end repeat
+        end repeat
+    end try
+end tell
+"#, escaped_id);
+
+        let output = Command::new("osascript").args(["-e", &script]).output()?;
+        if output.status.success() {
+            return Ok(());
+        }
+        error!("iTerm2 jump by session ID failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    jump_iterm2_by_pid(agent_pid)
 }
 
 fn jump_iterm2_by_pid(agent_pid: Option<u32>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -185,49 +216,55 @@ mod tests {
 
     #[test]
     fn test_jump_to_session_unknown_terminal() {
-        let result = jump_to_session("UnknownTerm", "tab-123");
+        let result = jump_to_session("UnknownTerm", "tab-123", "");
         assert!(result.is_err() || result.is_ok());
     }
 
     #[test]
     fn test_jump_to_session_ghostty() {
-        let result = jump_to_session("Ghostty", "tab-cli-12345");
+        let result = jump_to_session("Ghostty", "tab-cli-12345", "");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_jump_to_session_iterm2_no_pid() {
-        let result = jump_to_session("iTerm2", "tab-unknown");
+        let result = jump_to_session("iTerm2", "tab-unknown", "");
         assert!(result.is_ok());
     }
 
     #[test]
+    fn test_jump_to_session_iterm2_with_session_id() {
+        let result = jump_to_session("iTerm2", "tab-cli-12345", "w0t0p0:ABC-123");
+        let _ = result;
+    }
+
+    #[test]
     fn test_jump_to_session_terminal_no_pid() {
-        let result = jump_to_session("Terminal", "tab-unknown");
+        let result = jump_to_session("Terminal", "tab-unknown", "");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_jump_to_session_vscode() {
-        let result = jump_to_session("VSCode", "tab-123");
+        let result = jump_to_session("VSCode", "tab-123", "");
         let _ = result;
     }
 
     #[test]
     fn test_jump_to_session_cursor() {
-        let result = jump_to_session("Cursor", "tab-123");
+        let result = jump_to_session("Cursor", "tab-123", "");
         let _ = result;
     }
 
     #[test]
     fn test_jump_to_session_windsurf() {
-        let result = jump_to_session("Windsurf", "tab-123");
+        let result = jump_to_session("Windsurf", "tab-123", "");
         let _ = result;
     }
 
     #[test]
     fn test_jump_to_session_zed() {
-        let result = jump_to_session("Zed", "tab-123");
+        let result = jump_to_session("Zed", "tab-123", "");
         let _ = result;
     }
 }

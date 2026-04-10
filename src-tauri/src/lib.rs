@@ -76,7 +76,7 @@ async fn jump_to_terminal(state: State<'_, AppState>, session_id: String) -> Res
         .find(|s| s.id == session_id)
         .ok_or("Session not found")?;
 
-    terminal::jump_to_session(&session.terminal, &session.tab_id)
+    terminal::jump_to_session(&session.terminal, &session.tab_id, &session.iterm_session_id)
         .map_err(|e| e.to_string())?;
 
     Ok(())

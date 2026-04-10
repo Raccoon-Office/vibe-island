@@ -35,7 +35,6 @@ macOS 桌面浮动窗口，仿苹果灵动岛（Dynamic Island），实时监控
 - **macOS**（仅支持 macOS，使用了 cocoa/objc/AppleScript）
 - **Node.js** >= 18
 - **Rust** 工具链（rustup + cargo）
-- **Python 3**（Hook 脚本运行需要）
 
 ## 快速开始
 
@@ -70,21 +69,22 @@ cp -R src-tauri/target/release/bundle/macos/Vibe\ Island.app /Applications/
 
 ```
 ┌──────────────────┐     stdin/JSON      ┌──────────────┐    Unix Socket    ┌──────────────────┐
-│  Claude Code /   │ ──────────────────→ │  hook.py     │ ────────────────→ │  Vibe Island     │
-│  Gemini / etc.   │   (Hook 触发)       │  (Python)    │   (JSON line)     │  (Rust Backend)  │
+│  Claude Code /   │ ──────────────────→ │ vibe-bridge  │ ────────────────→ │  Vibe Island     │
+│  Gemini / etc.   │   (Hook 触发)       │  (Rust 二进制)│   (JSON line)     │  (Rust Backend)  │
 └──────────────────┘                     └──────────────┘                   └────────┬─────────┘
-                                                                                     │
-                                                                              Tauri Event
-                                                                                     │
-                                                                                     ▼
-                                                                           ┌──────────────────┐
-                                                                           │  React Frontend  │
-                                                                           │  (像素骑士渲染)    │
-                                                                           └──────────────────┘
+                                                                                      │
+┌──────────────────┐    direct socket                                        Tauri Event
+│  OpenCode        │ ────────────────────────────────────────────────────────────→│
+│  (JS Plugin)     │                                                            │
+└──────────────────┘                                                             ▼
+                                                                       ┌──────────────────┐
+                                                                       │  React Frontend  │
+                                                                       │  (像素骑士渲染)    │
+                                                                       └──────────────────┘
 ```
 
-1. **Hook 注册** — 启动时自动在 `~/.claude/settings.json` 和 `~/.gemini/settings.json` 中注册 Hook 命令
-2. **事件捕获** — AI Agent 触发 PreToolUse / PostToolUse / Stop / Notification 时，Hook 脚本通过 Unix Domain Socket 发送 JSON 到后端
+1. **Hook 注册** — 启动时自动在 `~/.claude/settings.json` 和 `~/.gemini/settings.json` 中注册 Hook 命令，并每 5 分钟自动修复
+2. **事件捕获** — AI Agent 触发 PreToolUse / PostToolUse / Stop / Notification 时，Bridge 二进制注入终端环境变量并通过 Unix Domain Socket 发送 JSON 到后端
 3. **状态管理** — Rust 后端维护会话列表，通过 Tauri 事件推送到前端
 4. **可视化** — React 前端用 CSS 像素艺术渲染每个 Agent 的状态动画
 
@@ -95,9 +95,10 @@ cp -R src-tauri/target/release/bundle/macos/Vibe\ Island.app /Applications/
 | 文件 | 说明 |
 |------|------|
 | `~/.config/vibe-island/claude.sock` | Unix Domain Socket（通信通道） |
-| `~/.config/vibe-island/hook.py` | Python Hook 脚本（自动生成，chmod 755） |
+| `~/.config/vibe-island/vibe-bridge` | Rust Bridge 二进制（替代 Python hook） |
 | `~/.claude/settings.json` | 注册 PreToolUse / PostToolUse / Stop / Notification Hook |
 | `~/.gemini/settings.json` | 注册 SessionStart / BeforeTool / AfterTool / AfterAgent / SessionEnd Hook |
+| `~/.config/opencode/plugins/vibe-island.js` | OpenCode JS 插件（直接 socket 通信） |
 | `~/Library/Local/VibeIsland/logs/` | 日志目录 |
 
 无需手动配置任何文件。
@@ -114,16 +115,20 @@ cp -R src-tauri/target/release/bundle/macos/Vibe\ Island.app /Applications/
 │   ├── styles.css                # 像素骑士 CSS 动画、Dynamic Island 样式
 │   ├── hooks/useIPC.ts           # Tauri 事件监听、会话状态管理
 │   └── types/index.ts            # TypeScript 类型定义
-└── src-tauri/                    # 后端（Rust + Tauri v2）
-    ├── Cargo.toml                # Rust 依赖
-    ├── tauri.conf.json           # Tauri 窗口/构建配置
-    ├── capabilities/default.json # Tauri v2 权限
-    └── src/
-        ├── main.rs               # 二进制入口
-        ├── lib.rs                # 核心初始化 — 窗口透明化、位置定位、状态管理
-        ├── claude/mod.rs         # Hook 桥接 — Socket 服务器、会话管理、Hook 注册
-        ├── ipc/mod.rs            # IPC 事件类型
-        └── terminal/mod.rs       # 终端跳转 — AppleScript 各终端适配
+├── src-tauri/                    # 后端（Rust + Tauri v2）
+│   ├── Cargo.toml                # Rust 依赖
+│   ├── build.rs                  # 构建脚本（编译并复制 bridge 二进制）
+│   ├── tauri.conf.json           # Tauri 窗口/构建配置
+│   ├── capabilities/default.json # Tauri v2 权限
+│   └── src/
+│       ├── main.rs               # 二进制入口
+│       ├── lib.rs                # 核心初始化 — 窗口透明化、位置定位、状态管理
+│       ├── claude/mod.rs         # Hook 桥接 — Socket 服务器、会话管理、Hook 注册/自动修复
+│       ├── ipc/mod.rs            # IPC 事件类型
+│       └── terminal/mod.rs       # 终端跳转 — AppleScript 各终端适配（支持 ITERM_SESSION_ID）
+└── src-bridge/                   # Bridge 二进制（Rust，替代 Python hook.py）
+    ├── Cargo.toml
+    └── src/main.rs               # stdin → 注入环境变量 → socket → 等待响应
 ```
 
 ## 技术栈
@@ -131,7 +136,7 @@ cp -R src-tauri/target/release/bundle/macos/Vibe\ Island.app /Applications/
 - **前端**: React 18 + TypeScript + Vite
 - **后端**: Rust + Tauri v2 + Tokio
 - **原生集成**: cocoa / objc（窗口透明化）+ AppleScript（终端跳转）
-- **IPC**: Unix Domain Socket（Python Hook ↔ Rust 后端）+ Tauri Events（Rust ↔ React）
+- **IPC**: Unix Domain Socket（Rust Bridge ↔ Rust 后端）+ Tauri Events（Rust ↔ React）
 
 ## 分发
 
@@ -142,4 +147,4 @@ cd src-tauri/target/release/bundle/macos
 zip -r ~/Desktop/VibeIsland.zip "Vibe Island.app"
 ```
 
-对方解压后拖入 `/Applications` 目录使用。前提是对方的 Mac 上有 Python 3。
+对方解压后拖入 `/Applications` 目录使用。无需额外依赖。

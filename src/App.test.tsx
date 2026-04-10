@@ -38,6 +38,10 @@ const baseSession = {
   tabId: "tab-cli-12345",
   startedAt: 1000,
   lastActivity: 1000,
+  termProgram: "",
+  itermSessionId: "",
+  tmuxPane: "",
+  tty: "",
 };
 
 let ipcCallback: ((event: { payload: IPCEvent }) => void) | null = null;

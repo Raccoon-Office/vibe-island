@@ -8,6 +8,10 @@ export interface Session {
   tabId: string;
   startedAt: number;
   lastActivity: number;
+  termProgram: string;
+  itermSessionId: string;
+  tmuxPane: string;
+  tty: string;
 }
 
 export interface PermissionRequest {

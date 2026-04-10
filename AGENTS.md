@@ -33,10 +33,17 @@ Vibe Island — macOS 桌面浮动窗口，仿苹果灵动岛，实时监控 AI 
 - macOS only
 - Node.js >= 18
 - Rust 工具链（rustup + cargo）— 确保 `~/.zshrc` 中有 `export PATH="$HOME/.cargo/bin:$PATH"`
-- Python 3（Hook 脚本需要）
 
 ## 项目结构
 
 - `src/` — React 前端（组件、hooks、类型、样式、测试）
-- `src-tauri/src/` — Rust 后端（socket 服务器、IPC、终端跳转）
+- `src-tauri/` — Rust 后端（Tauri app，socket 服务器、IPC、终端跳转、Hook 注册）
+- `src-bridge/` — Rust bridge 二进制（替代 hook.py，无需 Python）
 - `src/test/` — 测试工具和 setup
+
+## 架构
+
+- **Bridge 二进制** (`vibe-bridge`): 编译的 Rust 小程序，替代 Python hook 脚本。读取 stdin JSON，注入终端环境变量，发送到 Unix socket
+- **Hook 自动修复**: 每次启动和每 5 分钟自动校验并修复 Claude/Gemini 的 Hook 配置
+- **终端环境注入**: 自动采集 TERM_PROGRAM、ITERM_SESSION_ID、TMUX_PANE、TTY 等环境变量
+- **OpenCode 插件**: 自动安装 JS 插件到 `~/.config/opencode/plugins/`，直接 socket 通信

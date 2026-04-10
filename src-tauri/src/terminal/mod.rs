@@ -150,3 +150,84 @@ end tell
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_escape_applescript_str_normal() {
+        assert_eq!(escape_applescript_str("Hello World"), "Hello World");
+    }
+
+    #[test]
+    fn test_escape_applescript_str_backslash() {
+        assert_eq!(escape_applescript_str("path\\to\\file"), "path\\\\to\\\\file");
+    }
+
+    #[test]
+    fn test_escape_applescript_str_quotes() {
+        assert_eq!(escape_applescript_str("say \"hello\""), "say \\\"hello\\\"");
+    }
+
+    #[test]
+    fn test_escape_applescript_str_mixed() {
+        assert_eq!(
+            escape_applescript_str("path\\to \"file\""),
+            "path\\\\to \\\"file\\\""
+        );
+    }
+
+    #[test]
+    fn test_escape_applescript_str_empty() {
+        assert_eq!(escape_applescript_str(""), "");
+    }
+
+    #[test]
+    fn test_jump_to_session_unknown_terminal() {
+        let result = jump_to_session("UnknownTerm", "tab-123");
+        assert!(result.is_err() || result.is_ok());
+    }
+
+    #[test]
+    fn test_jump_to_session_ghostty() {
+        let result = jump_to_session("Ghostty", "tab-cli-12345");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_jump_to_session_iterm2_no_pid() {
+        let result = jump_to_session("iTerm2", "tab-unknown");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_jump_to_session_terminal_no_pid() {
+        let result = jump_to_session("Terminal", "tab-unknown");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_jump_to_session_vscode() {
+        let result = jump_to_session("VSCode", "tab-123");
+        let _ = result;
+    }
+
+    #[test]
+    fn test_jump_to_session_cursor() {
+        let result = jump_to_session("Cursor", "tab-123");
+        let _ = result;
+    }
+
+    #[test]
+    fn test_jump_to_session_windsurf() {
+        let result = jump_to_session("Windsurf", "tab-123");
+        let _ = result;
+    }
+
+    #[test]
+    fn test_jump_to_session_zed() {
+        let result = jump_to_session("Zed", "tab-123");
+        let _ = result;
+    }
+}

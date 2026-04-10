@@ -74,12 +74,21 @@ pub async fn start_bridge(
     // Setup hooks in the background — non-fatal if it fails.
     let hook_socket = path.clone();
     tokio::spawn(async move {
-        let settings = match dirs::home_dir() {
-            Some(h) => h.join(".claude").join("settings.json"),
+        let home = match dirs::home_dir() {
+            Some(h) => h,
             None => return,
         };
-        if let Err(e) = setup_claude_hooks(&settings, &hook_socket).await {
-            warn!("Hook setup failed: {}", e);
+
+        // Setup / verify Claude Code hooks
+        let claude_settings = home.join(".claude").join("settings.json");
+        if let Err(e) = setup_claude_hooks(&claude_settings, &hook_socket).await {
+            warn!("Claude hook setup failed: {}", e);
+        }
+
+        // Setup / verify Gemini hooks
+        let gemini_settings = home.join(".gemini").join("settings.json");
+        if let Err(e) = setup_gemini_hooks(&gemini_settings).await {
+            warn!("Gemini hook setup failed: {}", e);
         }
     });
 
@@ -157,13 +166,29 @@ async fn handle_connection(stream: UnixStream, app_handle: AppHandle) {
         state.sessions.clone()
     };
 
+    // Normalize session_id: if we already have a running session from the same
+    // agent on the same terminal, reuse that session_id to avoid duplicates.
+    let agent_name = hook.agent.clone().unwrap_or_else(|| "claude-code".to_string());
+    let terminal = detect_terminal();
+    let resolved_id = {
+        let sessions = sessions_arc.lock().await;
+        let exact = sessions.iter().any(|s| s.id == hook.session_id);
+        if exact {
+            hook.session_id.clone()
+        } else if let Some(existing) = sessions.iter().find(|s| {
+            s.agent == agent_name && s.terminal == terminal && s.status != "completed"
+        }) {
+            existing.id.clone()
+        } else {
+            hook.session_id.clone()
+        }
+    };
+
     // Ensure a Session entry exists.
     {
         let mut sessions = sessions_arc.lock().await;
-        let agent_name = hook.agent.clone().unwrap_or_else(|| "claude-code".to_string());
         
-        if let Some(s) = sessions.iter_mut().find(|s| s.id == hook.session_id) {
-            // Update agent if it was unknown or generic
+        if let Some(s) = sessions.iter_mut().find(|s| s.id == resolved_id) {
             if s.agent == "claude-code" && agent_name != "claude-code" {
                 s.agent = agent_name;
                 let session_clone = s.clone();
@@ -177,17 +202,14 @@ async fn handle_connection(stream: UnixStream, app_handle: AppHandle) {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| agent_name.clone());
 
-            let _agent_pid = hook.session_id.strip_prefix("cli-")
-                .and_then(|p| p.parse::<u32>().ok());
-
             let session = Session {
-                id: hook.session_id.clone(),
+                id: resolved_id.clone(),
                 agent: agent_name,
                 title,
                 cwd: hook.cwd.clone().unwrap_or_default(),
                 status: "running".to_string(),
                 terminal: detect_terminal(),
-                tab_id: format!("tab-{}", hook.session_id),
+                tab_id: format!("tab-{}", resolved_id),
                 started_at: now_secs(),
                 last_activity: now_secs(),
             };
@@ -199,7 +221,7 @@ async fn handle_connection(stream: UnixStream, app_handle: AppHandle) {
 
     if hook.stop_hook_active.is_some() {
         // ── Stop hook ──────────────────────────────────────────────────────────
-        let session_id = hook.session_id.clone();
+        let session_id = resolved_id.clone();
         let session_clone = {
             let mut sessions = sessions_arc.lock().await;
             if let Some(s) = sessions.iter_mut().find(|s| s.id == session_id) {
@@ -224,8 +246,7 @@ async fn handle_connection(stream: UnixStream, app_handle: AppHandle) {
 
         let session_clone = {
             let mut sessions = sessions_arc.lock().await;
-            if let Some(s) = sessions.iter_mut().find(|s| s.id == hook.session_id) {
-                s.status = "waiting".to_string();
+            if let Some(s) = sessions.iter_mut().find(|s| s.id == resolved_id) {                s.status = "waiting".to_string();
                 s.title = message.clone();
                 s.last_activity = now_secs();
                 Some(s.clone())
@@ -244,8 +265,7 @@ async fn handle_connection(stream: UnixStream, app_handle: AppHandle) {
         // ── PostToolUse ────────────────────────────────────────────────────────
         let session_clone = {
             let mut sessions = sessions_arc.lock().await;
-            if let Some(s) = sessions.iter_mut().find(|s| s.id == hook.session_id) {
-                s.last_activity = now_secs();
+            if let Some(s) = sessions.iter_mut().find(|s| s.id == resolved_id) {                s.last_activity = now_secs();
                 s.status = "running".to_string();
                 Some(s.clone())
             } else {
@@ -263,8 +283,7 @@ async fn handle_connection(stream: UnixStream, app_handle: AppHandle) {
         // ── Notification ───────────────────────────────────────────────────────
         let session_clone = {
             let mut sessions = sessions_arc.lock().await;
-            if let Some(s) = sessions.iter_mut().find(|s| s.id == hook.session_id) {
-                s.status = "waiting".to_string();
+            if let Some(s) = sessions.iter_mut().find(|s| s.id == resolved_id) {                s.status = "waiting".to_string();
                 Some(s.clone())
             } else {
                 None
@@ -325,23 +344,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_detect_terminal() {
-        // Test environment variable detection
+    fn test_detect_terminal_ghostty() {
         std::env::set_var("TERM_PROGRAM", "Ghostty");
         assert_eq!(detect_terminal(), "Ghostty");
-
-        std::env::set_var("TERM_PROGRAM", "cursor");
-        assert_eq!(detect_terminal(), "Cursor");
-
-        std::env::set_var("TERM_PROGRAM", "VSCode");
-        assert_eq!(detect_terminal(), "VSCode");
-
-        std::env::set_var("TERM_PROGRAM", "UnknownApp");
-        assert_eq!(detect_terminal(), "UnknownApp");
     }
 
     #[test]
-    fn test_session_serialization() {
+    fn test_detect_terminal_iterm() {
+        std::env::set_var("TERM_PROGRAM", "iTerm.app");
+        assert_eq!(detect_terminal(), "iTerm2");
+    }
+
+    #[test]
+    fn test_detect_terminal_apple_terminal() {
+        std::env::set_var("TERM_PROGRAM", "Apple_Terminal");
+        assert_eq!(detect_terminal(), "Terminal");
+    }
+
+    #[test]
+    fn test_detect_terminal_vscode() {
+        std::env::set_var("TERM_PROGRAM", "VSCode");
+        assert_eq!(detect_terminal(), "VSCode");
+    }
+
+    #[test]
+    fn test_detect_terminal_cursor() {
+        std::env::set_var("TERM_PROGRAM", "cursor");
+        assert_eq!(detect_terminal(), "Cursor");
+    }
+
+    #[test]
+    fn test_detect_terminal_windsurf() {
+        std::env::set_var("TERM_PROGRAM", "windsurf");
+        assert_eq!(detect_terminal(), "Windsurf");
+    }
+
+    #[test]
+    fn test_detect_terminal_zed() {
+        std::env::set_var("TERM_PROGRAM", "Zed");
+        assert_eq!(detect_terminal(), "Zed");
+    }
+
+    #[test]
+    fn test_detect_terminal_unknown_app() {
+        std::env::set_var("TERM_PROGRAM", "WezTerm");
+        assert_eq!(detect_terminal(), "WezTerm");
+    }
+
+    #[test]
+    fn test_detect_terminal_empty_env() {
+        std::env::remove_var("TERM_PROGRAM");
+        assert_eq!(detect_terminal(), "Unknown");
+    }
+
+    #[test]
+    fn test_session_serialization_camel_case() {
         let session = Session {
             id: "test-id".to_string(),
             agent: "gemini".to_string(),
@@ -355,8 +412,142 @@ mod tests {
         };
 
         let json = serde_json::to_string(&session).unwrap();
-        assert!(json.contains("\"agent\":\"gemini\""));
-        assert!(json.contains("\"cwd\":\"/Users/test/dir\""));
+        assert!(json.contains("\"tabId\":\"tab-1\""));
+        assert!(json.contains("\"startedAt\":1000"));
+        assert!(json.contains("\"lastActivity\":1100"));
+    }
+
+    #[test]
+    fn test_session_deserialization() {
+        let json = r#"{
+            "id": "cli-999",
+            "agent": "opencode",
+            "title": "my-app",
+            "cwd": "/home/user/my-app",
+            "status": "waiting",
+            "terminal": "Ghostty",
+            "tabId": "tab-cli-999",
+            "startedAt": 5000,
+            "lastActivity": 5100
+        }"#;
+
+        let session: Session = serde_json::from_str(json).unwrap();
+        assert_eq!(session.id, "cli-999");
+        assert_eq!(session.agent, "opencode");
+        assert_eq!(session.status, "waiting");
+        assert_eq!(session.terminal, "Ghostty");
+        assert_eq!(session.tab_id, "tab-cli-999");
+        assert_eq!(session.started_at, 5000);
+    }
+
+    #[test]
+    fn test_permission_request_serialization() {
+        let req = PermissionRequest {
+            id: "req-1".to_string(),
+            session_id: "cli-100".to_string(),
+            request_type: "tool_use".to_string(),
+            tool_name: Some("Write".to_string()),
+            message: "Allow file write?".to_string(),
+            options: Some(vec!["Allow once".to_string(), "Deny".to_string()]),
+            timestamp: 9999,
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"sessionId\":\"cli-100\""));
+        assert!(json.contains("\"requestType\":\"tool_use\""));
+        assert!(json.contains("\"toolName\":\"Write\""));
+    }
+
+    #[test]
+    fn test_format_tool_message_with_path() {
+        let input = serde_json::json!({"path": "/Users/test/file.ts"});
+        let msg = format_tool_message("Write", &Some(input));
+        assert_eq!(msg, "Write /Users/test/file.ts");
+    }
+
+    #[test]
+    fn test_format_tool_message_with_command() {
+        let input = serde_json::json!({"command": "git status"});
+        let msg = format_tool_message("Bash", &Some(input));
+        assert_eq!(msg, "Bash: git status");
+    }
+
+    #[test]
+    fn test_format_tool_message_fallback() {
+        let input = serde_json::json!({"query": "search term"});
+        let msg = format_tool_message("Search", &Some(input));
+        assert_eq!(msg, "Use tool: Search");
+    }
+
+    #[test]
+    fn test_format_tool_message_none_input() {
+        let msg = format_tool_message("Unknown", &None);
+        assert_eq!(msg, "Use tool: Unknown");
+    }
+
+    #[test]
+    fn test_socket_path() {
+        let path = socket_path();
+        assert!(path.to_string_lossy().contains("vibe-island"));
+        assert!(path.to_string_lossy().ends_with("claude.sock"));
+    }
+
+    #[test]
+    fn test_now_secs_returns_reasonable_value() {
+        let t = now_secs();
+        assert!(t > 1700000000);
+    }
+
+    #[test]
+    fn test_is_pid_alive_current_process() {
+        let pid = std::process::id();
+        assert!(is_pid_alive(pid));
+    }
+
+    #[test]
+    fn test_is_pid_alive_dead_pid() {
+        assert!(!is_pid_alive(999999999));
+    }
+
+    #[test]
+    fn test_claude_hook_input_deserialization() {
+        let json = r#"{
+            "session_id": "cli-123",
+            "agent": "claude-code",
+            "tool_name": "Write",
+            "tool_input": {"path": "/test.txt"},
+            "cwd": "/Users/test"
+        }"#;
+
+        let input: ClaudeHookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.session_id, "cli-123");
+        assert_eq!(input.agent, Some("claude-code".to_string()));
+        assert_eq!(input.tool_name, Some("Write".to_string()));
+        assert!(input.tool_input.is_some());
+        assert!(input.tool_response.is_none());
+        assert!(input.stop_hook_active.is_none());
+    }
+
+    #[test]
+    fn test_claude_hook_input_stop_event() {
+        let json = r#"{
+            "session_id": "cli-456",
+            "stop_hook_active": true
+        }"#;
+
+        let input: ClaudeHookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.stop_hook_active, Some(true));
+    }
+
+    #[test]
+    fn test_claude_hook_input_notification() {
+        let json = r#"{
+            "session_id": "cli-789",
+            "message": "Task completed"
+        }"#;
+
+        let input: ClaudeHookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.message, Some("Task completed".to_string()));
     }
 }
 
@@ -569,5 +760,89 @@ if __name__ == "__main__":
     .map_err(|e| e.to_string())?;
 
     info!("Claude hooks configured in {:?}", settings_path);
+    Ok(())
+}
+
+async fn setup_gemini_hooks(settings_path: &PathBuf) -> Result<(), String> {
+    if !settings_path.exists() {
+        return Ok(());
+    }
+
+    let content = tokio::fs::read_to_string(settings_path)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+    let hooks_obj = settings
+        .as_object_mut()
+        .ok_or("settings.json is not a JSON object")?
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("hooks is not a JSON object")?
+        .to_owned();
+
+    let vibe_events = [
+        ("SessionStart", ""),
+        ("BeforeTool", "--waiting"),
+        ("AfterTool", "--running"),
+        ("AfterAgent", "--end"),
+        ("SessionEnd", "--exit"),
+    ];
+
+    let mut hooks = serde_json::Value::Object(hooks_obj);
+    let mut changed = false;
+
+    for (event, flag) in vibe_events {
+        let cmd = format!("VIBE_AGENT=gemini python3 $HOME/.config/vibe-island/hook.py {}", flag);
+        let arr = hooks
+            .as_object_mut()
+            .unwrap()
+            .entry(event)
+            .or_insert_with(|| serde_json::json!([]));
+
+        let already = arr
+            .as_array()
+            .map(|a| {
+                a.iter().any(|entry| {
+                    entry
+                        .get("hooks")
+                        .and_then(|h| h.as_array())
+                        .map(|h| {
+                            h.iter().any(|c| {
+                                c.get("command")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.contains("vibe-island"))
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+
+        if !already {
+            if let Some(a) = arr.as_array_mut() {
+                a.push(serde_json::json!({
+                    "hooks": [{ "type": "command", "command": cmd, "timeout": 5000 }]
+                }));
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        settings.as_object_mut().unwrap().insert("hooks".to_string(), hooks);
+        tokio::fs::write(
+            settings_path,
+            serde_json::to_string_pretty(&settings).unwrap(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        info!("Gemini hooks configured in {:?}", settings_path);
+    }
+
     Ok(())
 }
